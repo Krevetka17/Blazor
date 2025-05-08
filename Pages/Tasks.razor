@@ -1,0 +1,412 @@
+﻿@page "/tasks"
+@using ToDoListBlazor.Client.Services
+@using ToDoListBlazor.Shared
+@using System.Text.Json
+@inject TaskService TaskService
+@inject WebSocketClientService WebSocketService
+@implements IAsyncDisposable
+<link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+
+<div class="min-h-screen bg-gradient-to-br from-indigo-100 to-purple-100 p-6">
+    <div class="max-w-4xl mx-auto bg-white rounded-xl shadow-2xl p-6">
+        <h2 class="text-4xl font-extrabold text-gray-900 mb-8 text-center">Список задач</h2>
+
+        @if (!string.IsNullOrEmpty(errorMessage))
+        {
+            <div class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-6 rounded-lg" role="alert">
+                @errorMessage
+            </div>
+        }
+
+        @if (!string.IsNullOrEmpty(successMessage))
+        {
+            <div class="bg-green-100 border-l-4 border-green-500 text-green-700 p-4 mb-6 rounded-lg" role="alert">
+                @successMessage
+            </div>
+        }
+
+        @if (tasks == null)
+        {
+            <div class="text-center text-gray-600 py-6">Загрузка...</div>
+        }
+        else if (!tasks.Any())
+        {
+            <div class="text-center text-gray-600 py-6">Задач нет.</div>
+        }
+        else
+        {
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200 bg-white rounded-lg overflow-hidden">
+                    <thead class="bg-gradient-to-r from-indigo-500 to-purple-500 text-white">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-sm font-semibold uppercase tracking-wider">Название</th>
+                            <th class="px-6 py-3 text-left text-sm font-semibold uppercase tracking-wider">Описание</th>
+                            <th class="px-6 py-3 text-left text-sm font-semibold uppercase tracking-wider">Выполнено</th>
+                            <th class="px-6 py-3 text-left text-sm font-semibold uppercase tracking-wider">Действия</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-200">
+                        @foreach (var task in tasks)
+                        {
+                            <tr class="hover:bg-gray-50 transition-colors">
+                                <td class="px-6 py-4 whitespace-nowrap text-lg text-gray-800">@task.Title</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-gray-600">@task.Description</td>
+                                <td class="px-6 py-4 whitespace-nowrap">
+                                    <input type="checkbox" checked="@task.IsCompleted" @onchange="() => MarkCompleted(task)" class="h-5 w-5 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded" />
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                    <div class="flex space-x-3">
+                                        <button class="inline-flex items-center px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-green-500" @onclick="() => ShowEmailModal(task.Id)">
+                                            📧 Напомнить
+                                        </button>
+                                        <button class="inline-flex items-center px-4 py-2 bg-red-500 text-white rounded-md hover:bg-red-600 focus:outline-none focus:ring-2 focus:ring-red-500" @onclick="() => DeleteTask(task.Id)">
+                                            🗑 Удалить
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+
+        <h3 class="text-2xl font-semibold text-gray-800 mt-10 mb-6">Добавить задачу</h3>
+        <div class="flex space-x-4 mb-6">
+            <input class="flex-1 border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 p-2" @bind="newTask.Title" placeholder="Название" />
+            <input class="flex-1 border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 p-2" @bind="newTask.Description" placeholder="Описание" />
+            <button class="inline-flex items-center px-6 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500" @onclick="AddTask">
+                ➕ Добавить
+            </button>
+        </div>
+
+        <h3 class="text-2xl font-semibold text-gray-800 mt-10 mb-6">Проверка входящих писем (POP3/IMAP)</h3>
+        <div class="flex space-x-4 mb-6">
+            <button class="inline-flex items-center px-6 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500" @onclick="CheckInboxImap">
+                📥 Проверить IMAP
+            </button>
+            <button class="inline-flex items-center px-6 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500" @onclick="CheckInboxPop3">
+                📥 Проверить POP3
+            </button>
+        </div>
+
+        @if (inboxMessages != null && inboxMessages.Any())
+        {
+            <h4 class="text-xl font-medium text-gray-800 mb-4">Последние письма:</h4>
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200 bg-white rounded-lg overflow-hidden">
+                    <thead class="bg-gradient-to-r from-blue-500 to-indigo-500 text-white">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-sm font-semibold uppercase tracking-wider">Тема</th>
+                            <th class="px-6 py-3 text-left text-sm font-semibold uppercase tracking-wider">Отправитель</th>
+                            <th class="px-6 py-3 text-left text-sm font-semibold uppercase tracking-wider">Дата</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-200">
+                        @foreach (var message in inboxMessages)
+                        {
+                            <tr class="hover:bg-gray-50 transition-colors">
+                                <td class="px-6 py-4 whitespace-nowrap text-gray-800">@message.Subject</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-gray-600">@message.From</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-gray-600">@message.Date.ToString("g")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+        else if (inboxMessages != null)
+        {
+            <div class="text-center text-gray-600 py-6">Писем нет.</div>
+        }
+
+        <!-- Модальное окно для ввода email -->
+        <div class="modal fade @(showEmailModal ? "show d-block" : "")" tabindex="-1" style="background-color: rgba(0,0,0,0.5);">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Отправить напоминание</h5>
+                        <button type="button" class="btn-close" @onclick="CloseEmailModal">×</button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label for="recipientEmail" class="form-label">Email получателя</label>
+                            <input type="email" class="form-control" id="recipientEmail" @bind="recipientEmail" placeholder="example@mail.ru" />
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" @onclick="CloseEmailModal">Отмена</button>
+                        <button type="button" class="btn btn-primary" @onclick="SendEmailFromModal">Отправить</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private List<TaskItem> tasks = new();
+    private TaskItem newTask = new();
+    private List<InboxMessage> inboxMessages;
+    private string errorMessage = string.Empty;
+    private string successMessage = string.Empty;
+    private bool showEmailModal = false;
+    private string recipientEmail = "";
+    private int selectedTaskId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Подключаемся к WebSocket
+        try
+        {
+            await WebSocketService.ConnectAsync("ws://localhost:8090/ws"); // Укажите ваш URL для WebSocket
+            WebSocketService.OnMessageReceived += HandleWebSocketMessage;
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Ошибка подключения к WebSocket: {ex.Message}";
+            await ShowTemporaryMessage(errorMessage, true);
+        }
+
+        await LoadTasks();
+    }
+
+    private void HandleWebSocketMessage(string message)
+    {
+        try
+        {
+            var json = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(message);
+            var action = json["Action"].GetString();
+
+            switch (action)
+            {
+                case "Add":
+                    var newTask = JsonSerializer.Deserialize<TaskItem>(json["Task"].GetRawText());
+                    if (newTask != null)
+                    {
+                        tasks.Add(newTask);
+                    }
+                    break;
+
+                case "Update":
+                    var updatedTask = JsonSerializer.Deserialize<TaskItem>(json["Task"].GetRawText());
+                    if (updatedTask != null)
+                    {
+                        var index = tasks.FindIndex(t => t.Id == updatedTask.Id);
+                        if (index != -1)
+                        {
+                            tasks[index] = new TaskItem
+                            {
+                                Id = updatedTask.Id,
+                                Title = updatedTask.Title,
+                                Description = updatedTask.Description,
+                                IsCompleted = updatedTask.IsCompleted,
+                                CreatedAt = updatedTask.CreatedAt,
+                                RecipientEmail = updatedTask.RecipientEmail ?? string.Empty
+                            };
+                        }
+                    }
+                    break;
+
+                case "Delete":
+                    var taskId = json["TaskId"].GetInt32();
+                    var taskToRemove = tasks.FirstOrDefault(t => t.Id == taskId);
+                    if (taskToRemove != null)
+                    {
+                        tasks.Remove(taskToRemove);
+                    }
+                    break;
+            }
+
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Ошибка при обработке WebSocket-сообщения: {ex.Message}";
+            Task.Run(async () => await ShowTemporaryMessage(errorMessage, true));
+        }
+    }
+
+    private async Task LoadTasks()
+    {
+        try
+        {
+            tasks = await TaskService.GetTasks();
+            foreach (var task in tasks)
+            {
+                task.RecipientEmail = string.Empty;
+            }
+            errorMessage = string.Empty;
+            successMessage = string.Empty;
+            Console.WriteLine($"Загружено задач: {tasks.Count}");
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Ошибка загрузки задач: {ex.Message}";
+            await ShowTemporaryMessage(errorMessage, true);
+            Console.WriteLine($"Ошибка загрузки задач: {ex.Message}");
+        }
+    }
+
+    private async Task AddTask()
+    {
+        if (string.IsNullOrWhiteSpace(newTask.Title))
+        {
+            errorMessage = "Название задачи не может быть пустым.";
+            await ShowTemporaryMessage(errorMessage, true);
+            return;
+        }
+
+        try
+        {
+            var success = await TaskService.AddTask(newTask);
+            if (success)
+            {
+                newTask = new TaskItem();
+                successMessage = "Задача успешно добавлена!";
+            }
+            else
+            {
+                errorMessage = "Не удалось добавить задачу.";
+            }
+            await ShowTemporaryMessage(success ? successMessage : errorMessage, !success);
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Ошибка при добавлении задачи: {ex.Message}";
+            await ShowTemporaryMessage(errorMessage, true);
+        }
+    }
+
+    private async Task MarkCompleted(TaskItem task)
+    {
+        try
+        {
+            task.IsCompleted = !task.IsCompleted; // Обновляем состояние перед отправкой
+            var success = await TaskService.UpdateTask(task);
+            if (success)
+            {
+                successMessage = $"Задача '{task.Title}' обновлена!";
+            }
+            else
+            {
+                errorMessage = "Не удалось обновить задачу.";
+            }
+            await ShowTemporaryMessage(success ? successMessage : errorMessage, !success);
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Ошибка при обновлении задачи: {ex.Message}";
+            await ShowTemporaryMessage(errorMessage, true);
+        }
+    }
+
+    private async Task DeleteTask(int id)
+    {
+        try
+        {
+            await TaskService.DeleteTask(id);
+            successMessage = "Задача успешно удалена!";
+            await ShowTemporaryMessage(successMessage, false);
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Ошибка при удалении задачи: {ex.Message}";
+            await ShowTemporaryMessage(errorMessage, true);
+        }
+    }
+
+    private void ShowEmailModal(int taskId)
+    {
+        selectedTaskId = taskId;
+        recipientEmail = "";
+        showEmailModal = true;
+    }
+
+    private void CloseEmailModal()
+    {
+        showEmailModal = false;
+    }
+
+    private async Task SendEmailFromModal()
+    {
+        if (string.IsNullOrWhiteSpace(recipientEmail))
+        {
+            errorMessage = "Пожалуйста, введите email.";
+            await ShowTemporaryMessage(errorMessage, true);
+            return;
+        }
+
+        try
+        {
+            var success = await TaskService.SendEmail(selectedTaskId, recipientEmail);
+            if (success)
+            {
+                successMessage = $"Напоминание для задачи успешно отправлено на {recipientEmail}!";
+            }
+            else
+            {
+                errorMessage = "Не удалось отправить напоминание.";
+            }
+            await ShowTemporaryMessage(success ? successMessage : errorMessage, !success);
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Ошибка при отправке письма: {ex.Message}";
+            await ShowTemporaryMessage(errorMessage, true);
+        }
+
+        showEmailModal = false;
+    }
+
+    private async Task CheckInboxImap()
+    {
+        try
+        {
+            inboxMessages = await TaskService.CheckInboxImap();
+            successMessage = inboxMessages.Any() ? "Письма через IMAP успешно загружены!" : "Непрочитанных писем нет.";
+            await ShowTemporaryMessage(successMessage, false);
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Ошибка при проверке IMAP: {ex.Message}";
+            await ShowTemporaryMessage(errorMessage, true);
+        }
+    }
+
+    private async Task CheckInboxPop3()
+    {
+        try
+        {
+            inboxMessages = await TaskService.CheckInboxPop3();
+            successMessage = inboxMessages.Any() ? "Письма через POP3 успешно загружены!" : "Писем нет.";
+            await ShowTemporaryMessage(successMessage, false);
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Ошибка при проверке POP3: {ex.Message}";
+            await ShowTemporaryMessage(errorMessage, true);
+        }
+    }
+
+    private async Task ShowTemporaryMessage(string message, bool isError)
+    {
+        if (isError)
+            errorMessage = message;
+        else
+            successMessage = message;
+        StateHasChanged();
+        await Task.Delay(3000);
+        if (isError)
+            errorMessage = string.Empty;
+        else
+            successMessage = string.Empty;
+        StateHasChanged();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        WebSocketService.OnMessageReceived -= HandleWebSocketMessage;
+        await WebSocketService.DisposeAsync();
+    }
+}
