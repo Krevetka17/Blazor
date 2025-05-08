@@ -3,10 +3,10 @@ name: CI/CD for ToDoListBlazor
 on:
   push:
     branches:
-      - CI/CD2
+      - master
   pull_request:
     branches:
-      - CI/CD2
+      - master
 
 jobs:
   build-test-push-blazor:
